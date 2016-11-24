@@ -1,20 +1,15 @@
 require 'nn'
 
-if not wasserstein then
+local EMDCriterion, EMDCriterionCriterionParent = torch.class('nn.EMDCriterion'   , 'nn.Criterion')
 
-wasserstein = true;
-
-local WassersteinCriterion, WassersteinCriterionCriterionParent = torch.class('nn.WassersteinCriterion'   , 'nn.Criterion')
-
-
-function WassersteinCriterion:__init(...)
+function EMDCriterion:__init(...)
 	
-	WassersteinCriterionCriterionParent.__init(self)
+	EMDCriterionCriterionParent.__init(self)
 	xlua.require('torch',true)
 	xlua.require('nn',true)
 	local args = dok.unpack(
 	{...},
-	'nn.WassersteinCriterion','Initialize the WasserStein Criterion',
+	'nn.EMDCriterion','Initialize the WasserStein Criterion',
 	{arg='norm', type ='string', help='normalization methods [sum] or softmax',default="sum"},
 	{arg='sinkhorn', type ='boolean', help='force to use Sinhorn criteria',default=false},
 	{arg='lambda', type ='number', help='sinkhorn regularizatino',default=3},
@@ -42,7 +37,7 @@ function WassersteinCriterion:__init(...)
 	
 end
 
-function WassersteinCriterion:preprocess(P, Q)
+function EMDCriterion:preprocess(P, Q)
 
 	-- Update the full criterion to the type required by P
 --	self.tensorType = P:type()
@@ -59,7 +54,7 @@ function WassersteinCriterion:preprocess(P, Q)
 	end
 
 	------ The input vectors are flattened and normalized
-	assert(P:nElement()==Q:nElement() and P:size(P:dim())==Q:size(Q:dim()), "WassersteinCriterion: vectors do not match sizes")
+	assert(P:nElement()==Q:nElement() and P:size(P:dim())==Q:size(Q:dim()), "EMDCriterion: vectors do not match sizes")
 	local Pv = P:view(-1,P:size(P:dim()))
 	local Pn
 
@@ -119,7 +114,7 @@ function WassersteinCriterion:preprocess(P, Q)
 	return Pn, Qn
 end
 
-function WassersteinCriterion:zeroPad(P, sz) 
+function EMDCriterion:zeroPad(P, sz) 
 
 	if P:size(2) < sz then
 
@@ -130,7 +125,7 @@ function WassersteinCriterion:zeroPad(P, sz)
 	return P
 end
 
-function WassersteinCriterion:fSinkhorn(P,Q)
+function EMDCriterion:fSinkhorn(P,Q)
 
 	local M = self.M
 	local K = torch.mul(M, -self.lambda):add(-1):exp()
@@ -177,12 +172,12 @@ function WassersteinCriterion:fSinkhorn(P,Q)
 	return f, g 
 end
 
-function WassersteinCriterion:f(P, Q) 
+function EMDCriterion:f(P, Q) 
 
 	if self.sinkhorn then local f,g = self:fSinkhorn(P,Q) return f end
 
-	assert(self.M:size(1) == self.A:size(1), "WassersteinCriterion: metric and adjacency matrixes do not match sizes")
-	assert(self.M:size(1) >=      P:size(2), "WassersteinCriterion: metric and source vector do not match sizes")
+	assert(self.M:size(1) == self.A:size(1), "EMDCriterion: metric and adjacency matrixes do not match sizes")
+	assert(self.M:size(1) >=      P:size(2), "EMDCriterion: metric and source vector do not match sizes")
 
 	local phi = self:zeroPad(P-Q, self.M:size(1))
 	for i=1,self.A:size(1)-1 do phi[{{},self.A[i]}]:add(phi[{{},i}]) end
@@ -191,7 +186,7 @@ function WassersteinCriterion:f(P, Q)
 	return torch.mv(phi,self.M)
 end
 
-function WassersteinCriterion:calcdiff(P, Q) 
+function EMDCriterion:calcdiff(P, Q) 
 
 	local Pv = P:view(-1,P:size(P:dim()))
 	local Qv = Q:view(-1,Q:size(Q:dim()))
@@ -207,13 +202,13 @@ function WassersteinCriterion:calcdiff(P, Q)
 	return G:div(self.eps)
 end
 
-function WassersteinCriterion:g(P, Q) 
+function EMDCriterion:g(P, Q) 
 
 	if self.diff then return self:calcdiff(P,Q) end
 	if self.sinkhorn then local f,g = self:fSinkhorn(P,Q) return g end
 	
-	assert(self.M:size(1) == self.A:size(1), "WassersteinCriterion: metric and adjacency matrixes do not match sizes")
-	assert(self.M:size(1) >=      P:size(2), "WassersteinCriterion: metric and source vector do not match sizes")
+	assert(self.M:size(1) == self.A:size(1), "EMDCriterion: metric and adjacency matrixes do not match sizes")
+	assert(self.M:size(1) >=      P:size(2), "EMDCriterion: metric and source vector do not match sizes")
 
 	local phi = self:zeroPad(P-Q, self.M:size(1))
 
@@ -255,14 +250,14 @@ end
 
 ----------- Output interface -----------
 
-function WassersteinCriterion:updateOutput(input, target) 
+function EMDCriterion:updateOutput(input, target) 
 
 	local P,Q = self:preprocess(input, target)	
 	self.output = self:f(P,Q):cmul(self.scales):sum()/P:size(1)
 	return self.output
 end
 
-function WassersteinCriterion:updateGradInput(input, target) 
+function EMDCriterion:updateGradInput(input, target) 
 
 	local P,Q = self:preprocess(input, target)
 	self.gradInput = self:g(P, Q)[{{},{1,input:size(input:dim())}}]:clone()
@@ -275,8 +270,6 @@ function WassersteinCriterion:updateGradInput(input, target)
 	return self.gradInput:div(P:size(1))
 end
 
-
-end 
 
 
 
