@@ -1,0 +1,16 @@
+package = "EMDCriterion"
+version = "1.0-1"
+source = {
+   url = "git@github.com:MartinezTorres/EMDCriterion.git"
+}
+description = {
+   homepage = "https://github.com/MartinezTorres/EMDCriterion",
+   license = "MIT"
+}
+dependencies = {}
+build = {
+   type = "builtin",
+   modules = {
+      EMDCriterion = "EMDCriterion.lua"
+   }
+}
