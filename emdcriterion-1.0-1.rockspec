@@ -1,7 +1,8 @@
 package = "EMDCriterion"
 version = "1.0-1"
 source = {
-   url = "git@github.com:MartinezTorres/EMDCriterion.git"
+   url = "git://github.com/MartinezTorres/EMDCriterion.git",
+   tag = "master"
 }
 description = {
    homepage = "https://github.com/MartinezTorres/EMDCriterion",
