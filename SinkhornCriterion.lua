@@ -1,42 +1,29 @@
 require 'nn'
 
-local EMDCriterionBase, EMDCriterionBaseParent = torch.class('nn.EMDCriterionBase'   , 'nn.Criterion')
+local EMDCriterion, EMDCriterionCriterionParent = torch.class('nn.EMDCriterion'   , 'nn.Criterion')
 
-function EMDCriterionBase:__init(...)
+function EMDCriterion:__init(...)
 	
-	EMDCriterionBaseParent.__init(self)
+	EMDCriterionCriterionParent.__init(self)
 	xlua.require('torch',true)
 	xlua.require('nn',true)
 	local args = dok.unpack(
 	{...},
-	'nn.EMDCriterionBase','Initialize the WasserStein Criterion',
-	{arg='norm', type ='string', help='normalization: [log] [sum]',default=log},
-	{arg='sinkhorn', type ='boolean', help='force to use Sinkhorn criteria',default=false},
+	'nn.EMDCriterion','Initialize the WasserStein Criterion',
+	{arg='norm', type ='string', help='normalization:',default=nil},
 	{arg='lambda', type ='number', help='sinkhorn regularization',default=3},
 	{arg='iter', type ='number', help='maximum sinhorn iterations',default=100},
-	{arg='L1', type ='boolean', help='Employs the L1 Projected gradient',default=true},
-	{arg='rho', type ='number', help='Regularization parameter', default = 2},
 	{arg='diff', type ='boolean', help='Employs differentials instead of optimized functions, for debugging purposes',default=false},
 	{arg='eps', type ='number', help='epsilon for the differential estimation', default = 1e-3},
 	{arg='M', type ='torch.FloatTensor', help='Metric Space'},
-	{arg='A', type ='torch.IntTensor', help='Adjancency Matrix'}
 	)
 
 	for x,val in pairs(args) do
 		self[x] = val
 	end
-	self.normalize = nn.Normalize(1)
-	
-	-- M = nil assumes all edge costs to be 1
-
-	--           | A = nil | A:dim()=1
-	-- M = nil   | lin,M=1 | tree,M=1
-	-- M:dim()=1 |   lin   |   tree
-	-- M:dim()=2 |   FC    | XXXXXXXX
-	
 end
 
-function EMDCriterionBase:preprocess(P, Q)
+function EMDCriterion:preprocess(P, Q)
 
 	-- Update the full criterion to the type required by P
 	self:type(P:type())
@@ -55,21 +42,14 @@ function EMDCriterionBase:preprocess(P, Q)
 	-- Input vectors are flattened and normalized
 	assert(P:nElement()==Q:nElement() and P:size(P:dim())==Q:size(Q:dim()), "EMDCriterion: vectors do not match sizes")
 	local Pv = P:view(-1,P:size(P:dim()))
-	if self.norm=="sum" then
-	elseif self.norm=="log" then
-		self.lsm = nn.LogSoftMax()
-		Pv = self.lsm:forward(Pv)
-		Pv = torch.exp(Pv):add(1e-1)
-		
---		Pv = nn.SoftMax():forward(Pv)
-	else
-        error("Unsupported norm")
+	local Pn = Pv
+	if self.norm~=nil then
+		Pn = self.norm:forward(Pv)
 	end
-	self.scales = Pv:sum(2):add(1e-30)
-	local Pn = torch.cdiv(Pv, self.scales:expandAs(Pv))
-	
+	Pn = torch.cdiv(Pn, P:sum(2):add(1e-30):expandAs(Pv))
+
 	-- Output vectors are flattened and normalized
-	local Qv = Q:view(-1,Q:size(Q:dim()))
+	local Qv = Q:view(-1,Q:size(Q:dim()))	
 	local Qn = torch.cdiv(Qv, Q:sum(2):add(1e-30):expandAs(Qv))
 
 	-- N is the size of the output space
@@ -83,7 +63,7 @@ function EMDCriterionBase:preprocess(P, Q)
 	assert(T>=N, "Tree smaller than output space") 
 
 	-- If distance matrix is empty, we assume to be ones
-	self.M = self.M or torch.ones(T):type(P:type()):div(T)
+	self.M = self.M or torch.ones(T):type(P:type())
 
 	-- If we want to use Sinkhorn Distance, we must create a square distance matrix using Floyd algorithm
 	if self.sinkhorn and self.M:dim() ~= 2 then
@@ -116,7 +96,7 @@ function EMDCriterionBase:preprocess(P, Q)
 	return Pn, Qn
 end
 
-function EMDCriterionBase:zeroPad(P, sz) 
+function EMDCriterion:zeroPad(P, sz) 
 
 	if P:size(2) < sz then
 
@@ -127,7 +107,7 @@ function EMDCriterionBase:zeroPad(P, sz)
 	return P
 end
 
-function EMDCriterionBase:fSinkhorn(P,Q)
+function EMDCriterion:fSinkhorn(P,Q)
 
 	local M = self.M
 	local K = torch.mul(M, -self.lambda):add(-1):exp()
@@ -174,7 +154,7 @@ function EMDCriterionBase:fSinkhorn(P,Q)
 	return f, g 
 end
 
-function EMDCriterionBase:f(P, Q) 
+function EMDCriterion:f(P, Q) 
 
 	if self.sinkhorn then local f,g = self:fSinkhorn(P,Q) return f end
 
@@ -188,7 +168,7 @@ function EMDCriterionBase:f(P, Q)
 	return torch.mv(phi,self.M)
 end
 
-function EMDCriterionBase:calcdiff(P, Q) 
+function EMDCriterion:calcdiff(P, Q) 
 
 	local Pv = P:view(-1,P:size(P:dim()))
 	local Qv = Q:view(-1,Q:size(Q:dim()))
@@ -204,7 +184,7 @@ function EMDCriterionBase:calcdiff(P, Q)
 	return G:div(self.eps)
 end
 
-function EMDCriterionBase:g(P, Q) 
+function EMDCriterion:g(P, Q) 
 
 	if self.diff then return self:calcdiff(P,Q) end
 	if self.sinkhorn then local f,g = self:fSinkhorn(P,Q) return g end
@@ -250,58 +230,19 @@ function EMDCriterionBase:g(P, Q)
 end
 
 
------------ EMD Criterion interface -----------
-
-local EMDCriterion, EMDCriterionParent = torch.class('nn.EMDCriterion'   , 'nn.EMDCriterionBase')
-
-function EMDCriterion:__init(...)
-	
-	EMDCriterionParent.__init(self,...)
-	self = EMDCriterionParent.self
-	xlua.require('torch',true)
-	xlua.require('nn',true)	
-end
+----------- Output interface -----------
 
 function EMDCriterion:updateOutput(input, target) 
 
-	local P,Q = self:preprocess(input, target)
-
---	self.output = self:f(P,Q):cmul(self.scales):sum()/P:size(1)
-	self.output = self:f(P,Q)/P:size(1)
-
+	local P,Q = self:preprocess(input, target)	
+	self.output = self:f(P,Q)
 	return self.output
 end
 
 function EMDCriterion:updateGradInput(input, target) 
 
 	local P,Q = self:preprocess(input, target)
-	
 	self.gradInput = self:g(P, Q)[{{},{1,input:size(input:dim())}}]:clone()
-	
-	if self.norm == 'log' then
-		
-		self.gradInput = self.gradInput:cdiv(torch.exp(P))
-		self.gradInput = self.lsm:backward(P,self.gradInput)
-		self.gradInput:clamp(-30,30)		
-	end
-	return self.gradInput
-end
-
-function EMDCriterion:updateGradInputDiff(input, target) 
-
-	local Pv = input:view(-1,input:size(input:dim())):clone()
-	self.gradInput  = Pv:clone()
-
-	for j = 1,Pv:size(2) do
-		local dA = torch.zeros(1, Pv:size(2))
-		dA[1][j] = 1
-		if self.L1 then dA = dA - 1/Pv:size(2) end
-		
-		self.gradInput[{{},{j}}] = self:forward(Pv+dA:mul(self.eps):expandAs(Pv),target) - self:forward(Pv,target)
-	end
-	
-	self.gradInput = self.gradInput:div(self.eps)
-
 	return self.gradInput
 end
 

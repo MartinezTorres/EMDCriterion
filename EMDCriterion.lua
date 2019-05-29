@@ -1,18 +1,18 @@
 require 'nn'
 
-local EMDCriterion, EMDCriterionCriterionParent = torch.class('nn.EMDCriterion'   , 'nn.Criterion')
+local EMDCriterionBase, EMDCriterionBaseParent = torch.class('nn.EMDCriterionBase'   , 'nn.Criterion')
 
-function EMDCriterion:__init(...)
+function EMDCriterionBase:__init(...)
 	
-	EMDCriterionCriterionParent.__init(self)
+	EMDCriterionBaseParent.__init(self)
 	xlua.require('torch',true)
 	xlua.require('nn',true)
 	local args = dok.unpack(
 	{...},
-	'nn.EMDCriterion','Initialize the WasserStein Criterion',
-	{arg='norm', type ='string', help='normalization methods [sum] or softmax',default="sum"},
-	{arg='sinkhorn', type ='boolean', help='force to use Sinhorn criteria',default=false},
-	{arg='lambda', type ='number', help='sinkhorn regularizatino',default=3},
+	'nn.EMDCriterionBase','Initialize the WasserStein Criterion',
+	{arg='norm', type ='string', help='normalization:',default=nil},
+	{arg='sinkhorn', type ='boolean', help='force to use Sinkhorn criteria',default=false},
+	{arg='lambda', type ='number', help='sinkhorn regularization',default=3},
 	{arg='iter', type ='number', help='maximum sinhorn iterations',default=100},
 	{arg='L1', type ='boolean', help='Employs the L1 Projected gradient',default=true},
 	{arg='rho', type ='number', help='Regularization parameter', default = 2},
@@ -25,8 +25,7 @@ function EMDCriterion:__init(...)
 	for x,val in pairs(args) do
 		self[x] = val
 	end
-	
-	self.sm = nn.SoftMax()
+	self.normalize = nn.Normalize(1)
 	
 	-- M = nil assumes all edge costs to be 1
 
@@ -37,13 +36,13 @@ function EMDCriterion:__init(...)
 	
 end
 
-function EMDCriterion:preprocess(P, Q)
+function EMDCriterionBase:preprocess(P, Q)
 
 	-- Update the full criterion to the type required by P
---	self.tensorType = P:type()
 	self:type(P:type())
 	
-	------ if the target is only the index of a coordinate instead of a weight vector, we  transform the target space accordingly
+	-- For Compatibility with CrossEntropyCriterion:
+	-- if the target is only the index of a coordinate instead of a vector, we transform the target space accordingly
 	if Q:dim()==1 or Q:size(Q:dim())==1 then
 	
 		local Qv = Q:view(-1,1)
@@ -53,39 +52,31 @@ function EMDCriterion:preprocess(P, Q)
 		end
 	end
 
-	------ The input vectors are flattened and normalized
+	-- Input vectors are flattened and normalized
 	assert(P:nElement()==Q:nElement() and P:size(P:dim())==Q:size(Q:dim()), "EMDCriterion: vectors do not match sizes")
 	local Pv = P:view(-1,P:size(P:dim()))
-	local Pn
-
-	if self.norm=="sum" then
+	local Pn = Pv
 	
-		self.scales = Pv:sum(2):add(1e-30)
-		Pn = torch.cdiv(Pv, self.scales:expandAs(Pv))
-		
-	elseif self.norm=="softmax" then
-		
-		self.scales = torch.ones(Pv:size(1),1):type(P:type())
-		Pn = self.sm:forward(Pv)
-	else
-		
-		error("Unsupported norm")
-	end
-	
+	--Pn = torch.cdiv(Pn, P:sum(2):add(1e-30):expandAs(Pv))
 
-	------ The output vectors are flattened and normalized
+	-- Output vectors are flattened and normalized
 	local Qv = Q:view(-1,Q:size(Q:dim()))	
 	local Qn = torch.cdiv(Qv, Q:sum(2):add(1e-30):expandAs(Qv))
 
-	------ We update the A and M matrix accordingly
+	-- N is the size of the output space
 	local N  = Pv:size(2)
-	
+		
+	-- If adjacency matrix is empty, we assume a histogram
 	self.A = self.A or torch.linspace(2, 1+N, N):type(P:type())
 
+	-- T is the size of the tree
 	local T  = self.A:size(1)
+	assert(T>=N, "Tree smaller than output space") 
 
-	self.M = self.M or torch.ones(T):type(P:type())
+	-- If distance matrix is empty, we assume to be ones
+	self.M = self.M or torch.ones(T):type(P:type()):div(T)
 
+	-- If we want to use Sinkhorn Distance, we must create a square distance matrix using Floyd algorithm
 	if self.sinkhorn and self.M:dim() ~= 2 then
 	
 	
@@ -109,12 +100,14 @@ function EMDCriterion:preprocess(P, Q)
 		end
 		self.M = M2
 	end
+	
+	-- If the distance matrix is quare, we must use Sinkhorn to solve it
 	self.sinkhorn = (self.M:dim()==2)
 	
 	return Pn, Qn
 end
 
-function EMDCriterion:zeroPad(P, sz) 
+function EMDCriterionBase:zeroPad(P, sz) 
 
 	if P:size(2) < sz then
 
@@ -125,7 +118,7 @@ function EMDCriterion:zeroPad(P, sz)
 	return P
 end
 
-function EMDCriterion:fSinkhorn(P,Q)
+function EMDCriterionBase:fSinkhorn(P,Q)
 
 	local M = self.M
 	local K = torch.mul(M, -self.lambda):add(-1):exp()
@@ -172,7 +165,7 @@ function EMDCriterion:fSinkhorn(P,Q)
 	return f, g 
 end
 
-function EMDCriterion:f(P, Q) 
+function EMDCriterionBase:f(P, Q) 
 
 	if self.sinkhorn then local f,g = self:fSinkhorn(P,Q) return f end
 
@@ -186,7 +179,7 @@ function EMDCriterion:f(P, Q)
 	return torch.mv(phi,self.M)
 end
 
-function EMDCriterion:calcdiff(P, Q) 
+function EMDCriterionBase:calcdiff(P, Q) 
 
 	local Pv = P:view(-1,P:size(P:dim()))
 	local Qv = Q:view(-1,Q:size(Q:dim()))
@@ -202,7 +195,7 @@ function EMDCriterion:calcdiff(P, Q)
 	return G:div(self.eps)
 end
 
-function EMDCriterion:g(P, Q) 
+function EMDCriterionBase:g(P, Q) 
 
 	if self.diff then return self:calcdiff(P,Q) end
 	if self.sinkhorn then local f,g = self:fSinkhorn(P,Q) return g end
@@ -250,24 +243,50 @@ end
 
 ----------- Output interface -----------
 
+
+local EMDCriterion, EMDCriterionParent = torch.class('nn.EMDCriterion'   , 'nn.EMDCriterionBase')
+
+function EMDCriterion:__init(...)
+	
+	EMDCriterionParent.__init(self, {...})
+	xlua.require('torch',true)
+	xlua.require('nn',true)	
+end
+
+
+
+
 function EMDCriterion:updateOutput(input, target) 
 
 	local P,Q = self:preprocess(input, target)	
-	self.output = self:f(P,Q):cmul(self.scales):sum()/P:size(1)
+	if self.norm~=nil then
+		P = self.norm:forward(P:clone())
+	end
+	P = self.normalize:forward(P:clone())
+
+	self.output = self:f(P,Q)
 	return self.output
 end
 
 function EMDCriterion:updateGradInput(input, target) 
 
 	local P,Q = self:preprocess(input, target)
-	self.gradInput = self:g(P, Q)[{{},{1,input:size(input:dim())}}]:clone()
-
-	if self.norm=="sum" then
---		self.gradInput:cmul(self.scales:expandAs(input:view(-1,input:size(input:dim()))))
-	elseif self.norm=="softmax" then
-		self.gradInput = self.sm:backward(input:view(-1,input:size(input:dim())), self.gradInput)
+	if self.norm~=nil then
+		P1 = self.norm:forward(P)
 	end
-	return self.gradInput:div(P:size(1))
+	P2 = self.normalize:forward(P1 or P)
+	
+	self.gradInput = self:g(P2 or P1 or P, Q)[{{},{1,input:size(input:dim())}}]:clone()
+	
+	print (self.normalize.
+	
+	self.gradInput = self.normalize:backward(P1 or P,self.gradInput:clone())
+
+	if self.norm~=nil then
+		self.gradInput = self.norm:updateGradInput(P, self.gradInput)
+	end
+
+	return self.gradInput
 end
 
 

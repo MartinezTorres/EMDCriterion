@@ -10,7 +10,7 @@ local signal = require 'signal.fft'
 local debugger = require('debugger')
 
 --require "WassersteinCriterion"
-require "/EMDCriterion2"
+require 'EMDCriterion.lua'
 --require "SinkhornCriterion"
 
 --[[command line arguments]]--
@@ -18,7 +18,7 @@ local opt = lapp[[
    -a,--augment                            perform augmentation
    -d,--data          (default psdThoVsFlow) data folder
    -p,--plot                               plot while training
-   -r,--learningRate  (default 0.001)      learning rate, for SGD only
+   -r,--learningRate  (default 0.001)        learning rate, for SGD only
    --cuda                                  use CUDA
    -b,--batchSize     (default 4000)       batch size
    -m,--momentum      (default 0.0)        momentum, for SGD only
@@ -36,11 +36,11 @@ function sleep(n)  -- seconds
 end
 
 -- kill existing gnuplot windows
-os.execute("killall gnuplot_x11");
+os.execute("killall gnuplot");
 
 
 -- threads
-torch.setnumthreads(1)
+torch.setnumthreads(opt.threads)
 print('<torch> set nb of threads to ' .. torch.getnumthreads())
 
 --torch.setdefaulttensortype('torch.FloatTensor')
@@ -780,22 +780,16 @@ if false then
 
 	local allCriterions = { 
 		gMSE = {
-			{"{/Symbol \\321}MSE",nn.MSECriterion(), 1.},
+			{"{/Symbol \\321}MSE",nn.MultiCriterion():add(nn.MSECriterion()   ,1.00), 20.},
+		},
+		gEMD = {
+			{"{/Symbol \\321}EMD^1",nn.WassersteinCriterion{rho=1}, .01},
+			{"{/Symbol \\321}EMD^2",nn.WassersteinCriterion{rho=2}, .01},
 		},
 		gSD = {
-			{"{/Symbol \\321}SD_{ {/Symbol l} = 0.5}",nn.EMDCriterion{sinkhorn=true,lambda=.5}, 0.01},
-			{"{/Symbol \\321}SD_{ {/Symbol l} = 1}",nn.EMDCriterion{sinkhorn=true,lambda=1}, 0.01},
-			{"{/Symbol \\321}SD_{ {/Symbol l} = 10}",nn.EMDCriterion{sinkhorn=true,lambda=10}, 0.01},
-		},
-		gEMD = {
-			{"{/Symbol \\321}EMD^1",nn.EMDCriterion{rho=1}, 1.},
-			{"{/Symbol \\321}EMD^2",nn.EMDCriterion{rho=2}, 1.},
-		},
-	}
-	allCriterions = { 
-		gEMD = {
-			{"{/Symbol \\321}EMD^1",nn.EMDCriterion{rho=1,norm=nn.SoftMax()}, 1.},
-			{"{/Symbol \\321}EMD^2",nn.EMDCriterion{rho=2,norm=nn.SoftMax()}, 1.},
+			{"{/Symbol \\321}SD_{ {/Symbol l} = 0.5}",nn.WassersteinCriterion{sinkhorn=true,lambda=.5}, .01},
+			{"{/Symbol \\321}SD_{ {/Symbol l} = 1}",nn.WassersteinCriterion{sinkhorn=true,lambda=1}, .01},
+			{"{/Symbol \\321}SD_{ {/Symbol l} = 10}",nn.WassersteinCriterion{sinkhorn=true,lambda=10}, .01},
 		},
 	}
 	for graphname,criterions in pairs(allCriterions) do
@@ -805,6 +799,8 @@ if false then
 		
 		for i = 1,A:size(2) do
 			A[1][i] = math.exp(-((i-7)*(i-7))/(2*8.1))
+	--		B[1][i] = math.exp(-((i-30)*(i-30))/(2*20))
+	--		B[1][i] = math.exp(-((i-50)*(i-50))/(2*20))
 			B[1][i] = math.exp(-((i-33)*(i-33))/(2*8.1))
 			if (i%2==0) then B[1][i]=0 end
 		end
@@ -819,13 +815,8 @@ if false then
 		local plots = {{"p",AA[1],'|'},{"q",BB[1],'|'}}
 		
 		for name,crit in pairs(criterions) do
-			crit[2].sizeAverage = false
-			--print(crit[1].." "..(crit[2]:forward(AA,BB)*crit[3]*10000))
-			--print(torch.log(AA):clamp(-30,30))
-			--print(torch.log(BB):clamp(-30,30))
-			print(crit[1])
-			print(crit[2]:backward(AA,BB))
-			table.insert(plots, {crit[1], (crit[2]:backward(AA,BB)):mul(crit[3])[1],'+-'})
+			print(crit[1].." "..(crit[2]:forward(AA,BB)*crit[3]*10000))
+			table.insert(plots, {crit[1], crit[2]:backward(AA,BB):mul(crit[3])[1],'+-'})
 		end
 		
 		gnuplot.epsfigure("figs/"..graphname.. ".eps")
@@ -839,153 +830,30 @@ if false then
 		gnuplot.plot(plots)
 		gnuplot.figprint("figs/"..graphname.. ".eps")
 		gnuplot.plotflush()
-		sleep(2)
+--		sleep(10)
 	end
 	
 	
 	os.exit()
 end
 
-
---------- higher resolution stuff
-if false then
-
-	allCriterions = { 
-		gEMD = {
-			{"{/Symbol \\321}EMD^1",nn.EMDCriterion{rho=0.5}, .25},
-			{"{/Symbol \\321}EMD^1",nn.EMDCriterion{rho=1}, .25},
-			{"{/Symbol \\321}EMD^2",nn.EMDCriterion{rho=4}, .25},
-		},
-	}
-	for graphname,criterions in pairs(allCriterions) do
-	
-		local A = torch.ones(1,39)
-		local B = torch.ones(1,39)
-		
-		for i = 1,A:size(2) do
-			A[1][i] = math.exp(-((i-7)*(i-7))/(2*8.1))
-			B[1][i] = math.exp(-((i-33)*(i-33))/(2*8.1))
-			if (i%2==0) then B[1][i]=0 end
-		end
-		
-		
-		local AA = A:clone()
-		local BB = B:clone()
-		
-		AA = torch.cdiv(AA, AA:clone():sum(2):add(1e-5):expandAs(AA)) -- normalize sum
-		BB = torch.cdiv(BB, BB:clone():sum(2):add(1e-5):expandAs(BB)) -- normalize sum
-
-		local plots = {{"p",nn.SoftMax():forward(torch.log(AA):clamp(-30,30))[1],'|'},{"q",BB[1],'|'}}
-		
-		for name,crit in pairs(criterions) do
-			crit[2].sizeAverage = false
---			print(crit[1].." "..(crit[2]:forward(AA,BB)*crit[3]*10000))
---			print(torch.log(AA):clamp(-30,30))
---			print(torch.log(BB):clamp(-30,30))
---			print(AA)
---			print(nn.SoftMax():forward(torch.log(AA):clamp(-30,30)))
---			print(crit[1])
---			print(crit[2]:backward(AA,BB))
-			table.insert(plots, {crit[1], (crit[2]:backward(AA,BB)):mul(crit[3])[1],'+-'})
-		end
-		
-		gnuplot.epsfigure("figs/"..graphname.. ".eps")
-		gnuplot.figure(2)
-		gnuplot.raw("set style fill solid noborder")
-		gnuplot.raw("set key off p")
-		gnuplot.raw("set key left bottom reverse Left")
-		gnuplot.raw("unset autoscale y")
-		gnuplot.raw("set yrange [-.4:.4]")
-		gnuplot.raw("set size .6 .6")
-		gnuplot.plot(plots)
-		gnuplot.figprint("figs/"..graphname.. ".eps")
-		gnuplot.plotflush()
-		sleep(2)
-	end
-	
-	
-	os.exit()
-end
-
---------- higher resolution stuff
-if false then
-
-	allCriterions = { 
-		gEMD = {
-			{"{/Symbol \\321}EMD^1",nn.EMDCriterion{rho=1,norm=nn.SoftMax()}, .25},
-			{"{/Symbol \\321}EMD^2",nn.EMDCriterion{rho=2,norm=nn.SoftMax()}, .25},
-		},
-	}
-	for graphname,criterions in pairs(allCriterions) do
-	
-		local A = torch.ones(1,39)
-		local B = torch.ones(1,39)
-		
-		for i = 1,A:size(2) do
-			A[1][i] = math.exp(-((i-7)*(i-7))/(2*8.1))
-			B[1][i] = math.exp(-((i-33)*(i-33))/(2*8.1))
-			if (i%2==0) then B[1][i]=0 end
-		end
-		
-		
-		local AA = A:clone()
-		local BB = B:clone()
-		
-		AA = torch.cdiv(AA:add(1e-1), AA:clone():sum(2):add(1e-10):expandAs(AA)) -- normalize sum
-		BB = torch.cdiv(BB:add(1e-10), BB:clone():sum(2):add(1e-10):expandAs(BB)) -- normalize sum
-
-		local plots = {{"p",nn.SoftMax():forward(torch.log(AA):clamp(-30,30))[1],'|'},{"q",BB[1],'|'}}
-		
-		for name,crit in pairs(criterions) do
-			crit[2].sizeAverage = false
-			--print(crit[1].." "..(crit[2]:forward(AA,BB)*crit[3]*10000))
-			--print(torch.log(AA):clamp(-30,30))
-			--print(torch.log(BB):clamp(-30,30))
-			print(AA)
-			print(nn.SoftMax():forward(torch.log(AA):clamp(-30,30)))
-			print(crit[1])
-			print(crit[2]:backward(torch.log(AA):clamp(-30,30),BB))
-			table.insert(plots, {crit[1], (crit[2]:backward(torch.log(AA):clamp(-30,30),BB)):mul(crit[3])[1],'+-'})
-		end
-		
-		gnuplot.epsfigure("figs/"..graphname.. ".eps")
-		gnuplot.figure(2)
-		gnuplot.raw("set style fill solid noborder")
-		gnuplot.raw("set key off p")
-		gnuplot.raw("set key left bottom reverse Left")
-		gnuplot.raw("unset autoscale y")
-		gnuplot.raw("set yrange [-.4:.4]")
-		gnuplot.raw("set size .6 .6")
-		gnuplot.plot(plots)
-		gnuplot.figprint("figs/"..graphname.. ".eps")
-		gnuplot.plotflush()
-		sleep(2)
-	end
-	
-	
-	os.exit()
-end
 -- ANIMATION
-
-local function drawPQ(A, B, name, it)
-
-	local plots = {{"q",A[1]:clone():float(),'|'},{"p",B[1]:clone():float(),'|'}}
-	
---	gnuplot.pngfigure("figs/"..name..it..".png")
-	gnuplot.title(name)
---	gnuplot.raw("set style fill solid border -1")
-	gnuplot.raw("set style fill solid border 0")
---	gnuplot.axis({0,41,-0.02,0.20})
-	gnuplot.figure(1)
-	gnuplot.plot(plots)
-	gnuplot.plotflush()
-end
-
 
 if true then
 
-	local name = "gEMD" 
-	local crit = nn.EMDCriterion{sinkhorn=false,rho=1,norm='log'}
+	local criterions = {
+		{"gMSE",nn.MultiCriterion():add(nn.MSECriterion()   ,1.00), 4.},
+--		{"gEMD",nn.MultiCriterion():add(nn.EMDCriterion()   ,1.00), .05},
+		{"gEMD_L1",nn.EMDCriterion{rho=1}, .1},
+--		{"gEMD2",nn.MultiCriterion():add(nn.EMD2Criterion()  ,1.00), .1},
+		{"gEMD2_L1",nn.EMDCriterion{rho=2}, .1},
+		{"gSD",nn.EMDCriterion{sinkhorn=true}, .1},
+	}
+	
+	
+--	local name = "gMSE" local crit = nn.MultiCriterion():add(nn.MSECriterion() ,4000.00)
+	local name = "gEMD" local crit = nn.MultiCriterion():add(nn.EMDCriterion{sinkhorn=false,rho=5} ,1.00)
+--	local name = "gSD" local crit = nn.MultiCriterion():add(nn.EMDCriterion{sinkhorn=true} ,1.00)
 
 	local A = torch.ones(1,40)
 	local B = torch.ones(1,40)
@@ -994,75 +862,45 @@ if true then
 	local v = 20
 	
 	for i = 1,A:size(2) do
-		A[1][i] =         (-((i-7)*(i-7))/(2*8.1))
-		B[1][i] = math.exp(-((i-33)*(i-33))/(2*8.1))
+		A[1][i] = math.exp(-((i-10)*(i-10))/(2*18))
+		B[1][i] = math.exp(-((i-p)*(i-p))/(2*v))
 		if (i%2==0) then B[1][i]=0 end
 	end
-	A = A:clamp(-30,30)
 	
---	print( crit:updateGradInput(A,B) )
---	print( crit:updateGradInputDiff(A,B) )
---	print( crit:updateGradInputDiff(A,B):cdiv(crit:updateGradInput(A,B)) )
-
-	B = torch.cdiv(B:add(1e-10), B:clone():sum(2):add(1e-10):expandAs(B)) -- normalize sum
-
-	print(crit:backward(A,B))
-	local ce=nn.CrossEntropyCriterion()
-	ce:forward(A,33)
-	print(ce:backward(A,33))
+	A[1] = A[1]:add(0.0001);
+	B[1] = B[1]:add(0.0001);
 	
-	local sm=nn.SoftMax()
-	print(sm:backward(A,nn.MSECriterion():backward(sm:forward(A),B)))
-			
-	for it = 1000, 1200 do
-
-		--print(it .. " " .. torch.exp(A):sum() .. " " .. crit:forward(A,B))
-		print(torch.exp(A):sum())
-
-		for it2 = 1, 10 do
-			A = A:add(-crit:backward(A,B):mul(0.1))
-		end
-				
-		drawPQ(B,nn.SoftMax():forward(A),name,it)
-		--drawPQ(B,A,name,it)
-
---		sleep(0.1)
-		print(it)
-	end
-	os.exit()
-end
-
-
-if false then
-
-	local name = "gEMD" 
-	local crit = nn.EMDCriterion{sinkhorn=false,rho=2}
-
-	local A = torch.ones(1,40)
-	local B = torch.ones(1,40)
 	
-	local p = 30
-	local v = 20
+	local AA = A:clone()
+	local BB = B:clone()
 	
-	for i = 1,A:size(2) do
-		A[1][i] = math.exp(-((i-7)*(i-7))/(2*8.1))
-		B[1][i] = math.exp(-((i-33)*(i-33))/(2*8.1))
-		if (i%2==0) then B[1][i]=0 end
-	end
+	AA = torch.cdiv(AA, AA:sum(2):add(1e-100):expandAs(AA)) -- normalize sum
+	BB = torch.cdiv(BB, BB:sum(2):add(1e-100):expandAs(BB)) -- normalize sum
 
-	print( crit:updateGradInput(A,B) )
-	print( crit:updateGradInputDiff(A,B) )
-	print( crit:updateGradInputDiff(A,B):cdiv(crit:updateGradInput(A,B)) )
-	
 	for it = 100, 200 do
+--		local plots = {{"q",BB[1]:clone(),'|'},{"p",AA[1]:clone(),'|'}}
+		
+--		for name,crit in pairs(criterions) do
+			--table.insert(plots, {crit[1], crit[2]:backward(AA,BB):mul(crit[3])[1],'+-'})
+			
+			for i=1,19 do 
+				AA = AA:add(-crit:backward(AA,BB):mul(.00001))
+			end
+			
+--		end
 
-		for it2 = 1, 2 do
-			A = A:add(-crit:backward(A,B):mul(0.000001))
-		end
-				
-		drawPQ(B,A,name,it)
+		local plots = {{"q",BB[1]:clone(),'|'},{"p",AA[1]:clone(),'|'}}
+		
+--		gnuplot.pngfigure("figs/"..name..it..".png")
+		gnuplot.title(name)
+--		gnuplot.raw("set style fill solid border -1")
+		gnuplot.raw("set style fill solid border 0")
+		gnuplot.axis({0,41,-0.02,0.20})
+		gnuplot.figure(1)
+		gnuplot.plot(plots)
+		gnuplot.plotflush()
 
-		sleep(.1)
+		sleep(.5)
 		print(it)
 	end
 	os.exit()
